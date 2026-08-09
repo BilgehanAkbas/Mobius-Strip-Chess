@@ -32,7 +32,7 @@ export function ClassicBoard({ board, selected, validMoves, onSquareClick }: Cla
                 roughness={0.58}
               />
             </mesh>
-            {piece && <group position={[0, 0.06, 0]} scale={1.35}><Piece data={piece} /></group>}
+            {piece && <group position={[0, 0.06, 0]} scale={1.6}><Piece data={piece} /></group>}
           </group>
         );
       }))}

@@ -26,15 +26,19 @@ export function createInitialBoard(mode: GameMode): BoardState {
     return board;
   }
 
+  // Two armies sit on opposite sides of the loop (8 columns apart, halfway
+  // around a 16-column strip) so both the "front" path and the wrap-around
+  // "back" path between them are equal length — genuinely playable from
+  // both directions instead of the armies starting crammed next to the seam.
   for (let y = 0; y < MOBIUS_ROWS; y += 1) {
     board[y][0] = { type: MOBIUS_BACK[0][y], color: "black" };
     board[y][1] = { type: MOBIUS_BACK[1][y], color: "black" };
     board[y][2] = { type: "pawn", color: "black" };
     board[y][3] = { type: "pawn", color: "black" };
-    board[y][15] = { type: MOBIUS_BACK[0][MOBIUS_ROWS - 1 - y], color: "white" };
-    board[y][14] = { type: MOBIUS_BACK[1][MOBIUS_ROWS - 1 - y], color: "white" };
-    board[y][13] = { type: "pawn", color: "white" };
-    board[y][12] = { type: "pawn", color: "white" };
+    board[y][9] = { type: MOBIUS_BACK[0][MOBIUS_ROWS - 1 - y], color: "white" };
+    board[y][8] = { type: MOBIUS_BACK[1][MOBIUS_ROWS - 1 - y], color: "white" };
+    board[y][7] = { type: "pawn", color: "white" };
+    board[y][6] = { type: "pawn", color: "white" };
   }
   return board;
 }
@@ -96,9 +100,10 @@ function slidingMoves(board: BoardState, mode: GameMode, from: Position, directi
   return moves;
 }
 
-function pawnMoves(board: BoardState, mode: GameMode, from: Position, color: PieceColor, attackOnly: boolean): Position[] {
+function pawnMoves(board: BoardState, mode: GameMode, from: Position, piece: PieceData, attackOnly: boolean): Position[] {
+  const { color } = piece;
   const moves: Position[] = [];
-  const forward = mode === "classic" ? (color === "white" ? -1 : 1) : (color === "white" ? -1 : 1);
+  const forward = color === "white" ? -1 : 1;
   const forwardVector: [number, number] = mode === "classic" ? [0, forward] : [forward, 0];
   const diagonals: [number, number][] = mode === "classic"
     ? [[-1, forward], [1, forward]]
@@ -115,11 +120,8 @@ function pawnMoves(board: BoardState, mode: GameMode, from: Position, color: Pie
   const oneStep = translatePosition(mode, from, forwardVector[0], forwardVector[1]);
   if (oneStep && !board[oneStep.y][oneStep.x]) {
     moves.push(oneStep);
-    const start = mode === "classic"
-      ? from.y === (color === "white" ? 6 : 1)
-      : from.x === (color === "white" ? 12 : 3);
     const twoStep = translatePosition(mode, oneStep, forwardVector[0], forwardVector[1]);
-    if (start && twoStep && !board[twoStep.y][twoStep.x]) moves.push(twoStep);
+    if (!piece.hasMoved && twoStep && !board[twoStep.y][twoStep.x]) moves.push(twoStep);
   }
   return moves;
 }
@@ -128,7 +130,7 @@ function pseudoMoves(board: BoardState, mode: GameMode, from: Position, attackOn
   const piece = board[from.y]?.[from.x];
   if (!piece) return [];
   switch (piece.type) {
-    case "pawn": return pawnMoves(board, mode, from, piece.color, attackOnly);
+    case "pawn": return pawnMoves(board, mode, from, piece, attackOnly);
     case "rook": return slidingMoves(board, mode, from, [[1, 0], [-1, 0], [0, 1], [0, -1]], attackOnly);
     case "bishop": return slidingMoves(board, mode, from, [[1, 1], [1, -1], [-1, 1], [-1, -1]], attackOnly);
     case "queen": return slidingMoves(board, mode, from, [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]], attackOnly);
@@ -173,7 +175,7 @@ export function applyMove(board: BoardState, mode: GameMode, move: Move): BoardS
 function promotionType(mode: GameMode, piece: PieceData, target: Position): PieceType | null {
   if (piece.type !== "pawn") return null;
   if (mode === "classic" && (target.y === 0 || target.y === 7)) return "queen";
-  if (mode === "mobius" && ((piece.color === "black" && target.x >= 14) || (piece.color === "white" && target.x <= 1))) return "queen";
+  if (mode === "mobius" && ((piece.color === "black" && (target.x === 8 || target.x === 9)) || (piece.color === "white" && (target.x === 0 || target.x === 1)))) return "queen";
   return null;
 }
 
