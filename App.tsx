@@ -1,41 +1,38 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BoardMap } from "./components/BoardMap";
+import { ConfirmButton, EndDialog, endReasonText, MenuDialog, MoveList, PromotionDialog, RulesDialog } from "./components/GameDialogs";
 import { GameScene } from "./components/GameScene";
 import { ModePreview } from "./components/ModePreview";
-import type { AnimatedMove, BoardState, DrawReason, GameHistory, GameMode, GameResult, Move, Opponent, PieceColor, PieceData, PieceType, Position } from "./types";
+import { OnlineLobby } from "./components/OnlineLobby";
+import type { AnimatedMove, GameMode, Move, Opponent, PieceColor, PieceData, Position } from "./types";
 import {
-  applyMove,
-  createInitialBoard,
   describeMove,
-  finalResult,
   findKing,
   getValidMoves,
   isKingInCheck,
   isPromotionMove,
-  recordMove,
   samePosition,
-  startHistory,
 } from "./utils/board";
-import { capturedOfColor, PIECE_GLYPHS, PIECE_NAMES } from "./utils/boardMap";
+import { capturedOfColor, PIECE_GLYPHS } from "./utils/boardMap";
 import type { BotLevel } from "./utils/bot";
 import { requestBotMove } from "./utils/botClient";
 import { canUseWebGL } from "./utils/device";
+import { type GameState, newGame, reconcileMoves, replayGame, resignGame, stepGame, undoCount } from "./utils/gameState";
+import { colorOf, getOnlineBackend, normalizeRoomCode, type OnlineGame, onlineErrorMessage } from "./utils/online";
 import { moveSettleTime } from "./utils/pieceMotion";
-import { clearSavedGame, loadGame, saveGame } from "./utils/savedGame";
+import { clearSavedGame, loadGame, loadSoundSetting, saveGame, saveSoundSetting } from "./utils/savedGame";
+import { playSound, unlockSoundOnFirstTouch } from "./utils/sound";
 import "./app.css";
 
 const BOT_REPLY_PAUSE_MS = 150;
-const CONFIRM_MS = 3000;
-const PROMOTION_PIECES: PieceType[] = ["queen", "rook", "bishop", "knight"];
+const ONLINE_POLL_MS = 5000;
 
-const drawMessages: Record<DrawReason, string> = {
-  stalemate: "Pat — oyun berabere.",
-  insufficient: "Mat edecek taş kalmadı — oyun berabere.",
-  repetition: "Aynı konum üç kez oluştu — oyun berabere.",
-  "fifty-moves": "50 hamledir taş alınmadı ve piyon oynanmadı — oyun berabere.",
-};
+type Screen = "start" | "color" | "online" | "game";
 
-type Screen = "start" | "color" | "game";
+interface OnlineSession {
+  gameId: string;
+  roomCode: string;
+}
 
 const modeLabels: Record<GameMode, string> = {
   classic: "Klasik Satranç",
@@ -46,17 +43,6 @@ const colorLabels: Record<PieceColor, string> = {
   white: "Beyaz",
   black: "Siyah",
 };
-
-function otherColor(color: PieceColor): PieceColor {
-  return color === "white" ? "black" : "white";
-}
-
-function resultMessage(result: GameResult, drawReason: DrawReason | null): string {
-  if (drawReason) return drawMessages[drawReason];
-  if (result === "white-wins") return "Şah mat — beyaz kazandı.";
-  if (result === "black-wins") return "Şah mat — siyah kazandı.";
-  return "Oyun devam ediyor.";
-}
 
 function CapturedRow({ label, color, captured }: { label: string; color: PieceColor; captured: PieceData[] }) {
   const pieces = capturedOfColor(captured, color);
@@ -72,68 +58,67 @@ function CapturedRow({ label, color, captured }: { label: string; color: PieceCo
   );
 }
 
-/** Throws a game away only on a second tap, so a slip of the finger on a phone costs nothing. */
-function ConfirmButton({ label, ask, onConfirm }: { label: string; ask: boolean; onConfirm: () => void }) {
-  const [asking, setAsking] = useState(false);
+function roomCodeFromLink(): string {
+  return normalizeRoomCode(new URLSearchParams(window.location.search).get("oda") ?? "");
+}
 
-  useEffect(() => {
-    if (!asking) return;
-    const timer = window.setTimeout(() => setAsking(false), CONFIRM_MS);
-    return () => window.clearTimeout(timer);
-  }, [asking]);
-
-  return (
-    <button
-      className={`secondary-button ${asking ? "is-asking" : ""}`}
-      type="button"
-      onClick={() => {
-        if (ask && !asking) {
-          setAsking(true);
-          return;
-        }
-        setAsking(false);
-        onConfirm();
-      }}
-    >
-      {asking ? "Oyun silinsin mi?" : label}
-    </button>
-  );
+function restoreSavedGame() {
+  const saved = loadGame();
+  const game = saved && replayGame(saved.mode, saved.moves);
+  if (!saved || !game) return null;
+  return { saved, game: saved.result ? { ...game, result: saved.result, endReason: saved.endReason } : game };
 }
 
 function App() {
   // A phone can reload the page whenever the browser goes to the background, so a game in progress comes back.
-  const [restored] = useState(loadGame);
-  const [screen, setScreen] = useState<Screen>(restored ? "game" : "start");
-  const [gameMode, setGameMode] = useState<GameMode | null>(restored?.mode ?? null);
-  const [playerColor, setPlayerColor] = useState<PieceColor | null>(restored?.playerColor ?? null);
-  const [opponent, setOpponent] = useState<Opponent>(restored?.opponent ?? "bot");
-  const [board, setBoard] = useState<BoardState | null>(restored?.board ?? null);
-  const [turn, setTurn] = useState<PieceColor>(restored?.turn ?? "white");
+  const [restored] = useState(restoreSavedGame);
+  const [inviteCode] = useState(roomCodeFromLink);
+  const [screen, setScreen] = useState<Screen>(inviteCode ? "online" : restored ? "game" : "start");
+  const [gameMode, setGameMode] = useState<GameMode | null>(inviteCode ? null : restored?.saved.mode ?? null);
+  const [playerColor, setPlayerColor] = useState<PieceColor | null>(restored?.saved.playerColor ?? null);
+  const [opponent, setOpponent] = useState<Opponent>(restored?.saved.opponent ?? "bot");
+  const [botLevel, setBotLevel] = useState<BotLevel>(restored?.saved.botLevel ?? "hard");
+  const [online, setOnline] = useState<OnlineSession | null>(restored?.saved.online ?? null);
+  const [game, setGame] = useState<GameState | null>(restored?.game ?? null);
   const [selected, setSelected] = useState<Position | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
-  const [result, setResult] = useState<GameResult>(restored?.result ?? null);
-  const [status, setStatus] = useState(restored?.status ?? "Oyun modunu seç.");
   const [lastMove, setLastMove] = useState<AnimatedMove | null>(null);
-  const [captured, setCaptured] = useState<PieceData[]>(restored?.captured ?? []);
   const [followCamera, setFollowCamera] = useState(true);
+  const [soundOn, setSoundOn] = useState(loadSoundSetting);
   const [gameId, setGameId] = useState(0);
-  const [history, setHistory] = useState<GameHistory | null>(restored?.history ?? null);
   const [pendingPromotion, setPendingPromotion] = useState<Move | null>(null);
-  const [botLevel, setBotLevel] = useState<BotLevel>(restored?.botLevel ?? "hard");
   const [webGLSupported] = useState(canUseWebGL);
   const [showRules, setShowRules] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [endDismissed, setEndDismissed] = useState(false);
+  const [opponentConnected, setOpponentConnected] = useState(true);
   const moveCount = useRef(0);
+  const gameRef = useRef(game);
+  gameRef.current = game;
+  const soundRef = useRef(soundOn);
+  soundRef.current = soundOn;
 
   const twoPlayers = opponent === "human";
+  const isOnline = opponent === "online";
+  const result = game?.result ?? null;
+  const turn = game?.turn ?? "white";
+
+  useEffect(() => unlockSoundOnFirstTouch(), []);
+
+  useEffect(() => {
+    // The invitation has done its job, and should not rejoin on every reload.
+    if (inviteCode) window.history.replaceState(null, "", window.location.pathname);
+  }, [inviteCode]);
 
   const validMoves = useMemo(
-    () => (board && gameMode && selected ? getValidMoves(board, gameMode, selected) : []),
-    [board, gameMode, selected],
+    () => (game && gameMode && selected ? getValidMoves(game.board, gameMode, selected) : []),
+    [game, gameMode, selected],
   );
 
   const checkedKing = useMemo(
-    () => (board && gameMode && isKingInCheck(board, gameMode, turn) ? findKing(board, turn) : null),
-    [board, gameMode, turn],
+    () => (game && gameMode && isKingInCheck(game.board, gameMode, game.turn) ? findKing(game.board, game.turn) : null),
+    [game, gameMode],
   );
 
   const selectMode = (mode: GameMode) => {
@@ -141,139 +126,219 @@ function App() {
     setScreen("color");
   };
 
-  const playMove = (current: BoardState, mode: GameMode, move: Move): BoardState => {
+  /** Plays a move on the board, with its animation and sound. */
+  const applyMove = (current: GameState, mode: GameMode, move: Move): GameState => {
     moveCount.current += 1;
-    const description = describeMove(current, mode, move);
-    const taken = description.captured;
-    setLastMove({ ...description, id: moveCount.current, color: current[move.from.y][move.from.x]!.color });
-    if (taken) setCaptured((previous) => [...previous, taken.piece]);
-    return applyMove(current, mode, move);
-  };
-
-  /** Plays the move and updates the game. Returns what the status line needs to know. */
-  const commitMove = (current: BoardState, mode: GameMode, currentHistory: GameHistory, move: Move, side: PieceColor) => {
-    const nextBoard = playMove(current, mode, move);
-    const nextTurn = otherColor(side);
-    const nextHistory = recordMove(currentHistory, current, nextBoard, mode, move, nextTurn);
-    const { result: nextResult, drawReason } = finalResult(nextBoard, mode, nextTurn, nextHistory);
-    setBoard(nextBoard);
-    setHistory(nextHistory);
+    const description = describeMove(current.board, mode, move);
+    const next = stepGame(current, mode, move);
+    setLastMove({ ...description, id: moveCount.current, color: current.turn });
+    setGame(next);
     setSelected(null);
-    setTurn(nextTurn);
-    setResult(nextResult);
-    return {
-      finished: nextResult ? resultMessage(nextResult, drawReason) : null,
-      inCheck: isKingInCheck(nextBoard, mode, nextTurn),
-    };
+    setHint(null);
+    if (soundRef.current) {
+      if (next.result) playSound("end");
+      else if (isKingInCheck(next.board, mode, next.turn)) playSound("check");
+      else playSound(description.captured ? "capture" : "move");
+    }
+    return next;
   };
 
-  const startGame = (color: PieceColor, nextOpponent: Opponent) => {
-    if (!gameMode) return;
-    const initial = createInitialBoard(gameMode);
+  /** Replaces the whole game without animating, for undo and for catching up with the server. */
+  const showGame = (next: GameState) => {
+    setGame(next);
+    setLastMove(null);
+    setSelected(null);
+    setPendingPromotion(null);
+  };
+
+  const beginGame = (mode: GameMode, color: PieceColor, nextOpponent: Opponent, session: OnlineSession | null) => {
+    setGameMode(mode);
     setPlayerColor(color);
     setOpponent(nextOpponent);
+    setOnline(session);
     setLastMove(null);
-    setCaptured([]);
-    setBoard(initial);
-    setHistory(startHistory(initial, gameMode));
+    setGame(newGame(mode));
     setPendingPromotion(null);
-    setTurn("white");
     setSelected(null);
+    setHint(null);
     setThinking(false);
-    setResult(null);
-    setStatus(nextOpponent === "human"
-      ? "Beyaz başlıyor. Bir taş seç."
-      : color === "white" ? "Sıra sende. Bir taş seç." : "Bot beyazlarla oyuna başlıyor.");
+    setEndDismissed(false);
+    setShowMenu(false);
+    setOpponentConnected(true);
     setGameId((id) => id + 1);
     setScreen("game");
   };
 
+  const startGame = (color: PieceColor, nextOpponent: Opponent) => {
+    if (gameMode) beginGame(gameMode, color, nextOpponent, null);
+  };
+
+  const startOnlineGame = (room: OnlineGame, myId: string) => {
+    const color = colorOf(room, myId);
+    if (color) beginGame(room.mode, color, "online", { gameId: room.id, roomCode: room.roomCode });
+  };
+
   const returnToMenu = () => {
+    if (isOnline && online && !result) void getOnlineBackend().resign(online.gameId).catch(() => undefined);
     clearSavedGame();
     setScreen("start");
     setGameMode(null);
     setPlayerColor(null);
-    setBoard(null);
-    setHistory(null);
+    setOpponent("bot");
+    setOnline(null);
+    setGame(null);
     setPendingPromotion(null);
     setLastMove(null);
-    setCaptured([]);
     setSelected(null);
-    setResult(null);
+    setHint(null);
     setThinking(false);
-    setStatus("Oyun modunu seç.");
+    setShowMenu(false);
+    setEndDismissed(false);
   };
+
+  /** Asks the server for the truth and follows it. Every online event simply ends up here. */
+  const syncOnline = useCallback(async (trustServer = false) => {
+    if (!online || !gameMode) return;
+    const { game: room, moves } = await getOnlineBackend().fetchGame(online.gameId);
+    const current = gameRef.current;
+    if (!current) return;
+    const plan = reconcileMoves(current, gameMode, moves, trustServer);
+    let next = current;
+    if (plan.kind === "append") next = applyMove(current, gameMode, plan.move);
+    else if (plan.kind === "replace") {
+      next = plan.game;
+      showGame(next);
+    } else if (plan.kind === "invalid" && !current.result && playerColor) {
+      // Only a tampered client can send this. The honest player wins instead of playing on a broken board.
+      next = { ...current, result: playerColor === "white" ? "white-wins" : "black-wins", endReason: "invalid-move" };
+      setGame(next);
+      void getOnlineBackend().finishGame(online.gameId, next.result, "invalid-move").catch(() => undefined);
+    }
+    if (room.status === "finished" && !next.result) setGame({ ...next, result: room.result, endReason: room.endReason });
+    else if (next.result && next.endReason && room.status !== "finished") {
+      void getOnlineBackend().finishGame(online.gameId, next.result, next.endReason).catch(() => undefined);
+    }
+  }, [gameMode, online, playerColor]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!online || screen !== "game" || !playerColor) return;
+    const backend = getOnlineBackend();
+    const sync = () => void syncOnline().catch(() => undefined);
+    let unsubscribe = () => undefined as void;
+    let stopped = false;
+    void backend.signIn().then((myId) => {
+      if (stopped) return;
+      unsubscribe = backend.subscribe(online.gameId, myId, { onChange: sync, onPresence: setOpponentConnected });
+    }).catch(() => undefined);
+    // Realtime can go quiet on a phone, so a slow check keeps the game honest, and coming back to the tab checks at once.
+    const timer = window.setInterval(sync, ONLINE_POLL_MS);
+    document.addEventListener("visibilitychange", sync);
+    sync();
+    return () => {
+      stopped = true;
+      unsubscribe();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [online, playerColor, screen, syncOnline]);
 
   const playPlayerMove = (move: Move) => {
-    if (!board || !gameMode || !history) return;
-    const { finished, inCheck } = commitMove(board, gameMode, history, move, turn);
-    if (finished) setStatus(finished);
-    else if (!twoPlayers) setStatus("Bot düşünüyor…");
-    else setStatus(inCheck ? "Şah! Hamleni dikkatle seç." : "Bir taş seç.");
+    if (!game || !gameMode) return;
+    const ply = game.log.length;
+    const next = applyMove(game, gameMode, move);
+    if (isOnline && online) {
+      const backend = getOnlineBackend();
+      void backend.playMove(online.gameId, ply, move)
+        .then(() => (next.result && next.endReason ? backend.finishGame(online.gameId, next.result, next.endReason) : undefined))
+        .catch((failure: unknown) => {
+          setHint(onlineErrorMessage(failure));
+          void syncOnline(true).catch(() => undefined);
+        });
+    }
   };
 
+  const activeColor = twoPlayers ? turn : playerColor;
+
   const onSquareClick = (position: Position) => {
-    if (!board || !gameMode || !playerColor || thinking || result || pendingPromotion) return;
-    const activeColor = twoPlayers ? turn : playerColor;
+    if (!game || !gameMode || !playerColor || thinking || result || pendingPromotion) return;
     if (turn !== activeColor) return;
 
     if (samePosition(selected, position)) {
       setSelected(null);
-      setStatus("Bir taş seç.");
+      setHint(null);
       return;
     }
 
-    const clickedPiece = board[position.y][position.x];
+    const clickedPiece = game.board[position.y][position.x];
     const isLegalTarget = selected && validMoves.some((move) => samePosition(move, position));
 
     if (selected && isLegalTarget) {
       const move = { from: selected, to: position };
-      if (isPromotionMove(board, gameMode, move)) setPendingPromotion(move);
+      if (isPromotionMove(game.board, gameMode, move)) setPendingPromotion(move);
       else playPlayerMove(move);
       return;
     }
 
     if (clickedPiece?.color === activeColor) {
       setSelected(position);
-      const moves = getValidMoves(board, gameMode, position);
-      setStatus(moves.length ? "Yeşil işaretler geçerli hamleleri, kırmızı halkalar taş alma hamlelerini gösterir." : "Bu taşın geçerli hamlesi yok.");
+      const moves = getValidMoves(game.board, gameMode, position);
+      setHint(moves.length ? "Yeşil işaretler geçerli hamleleri, kırmızı halkalar taş alma hamlelerini gösterir." : "Bu taşın geçerli hamlesi yok.");
       return;
     }
 
     setSelected(null);
-    setStatus("Önce kendi taşlarından birini seç.");
+    setHint("Önce kendi taşlarından birini seç.");
+  };
+
+  const resign = () => {
+    if (!game || result || !playerColor) return;
+    if (isOnline && online) void getOnlineBackend().resign(online.gameId).catch(() => undefined);
+    setGame(resignGame(game, twoPlayers ? turn : playerColor));
+    setSelected(null);
+    if (soundRef.current) playSound("end");
+  };
+
+  const undoSteps = !game || !playerColor || isOnline || thinking ? 0 : twoPlayers ? Math.min(game.log.length, 1) : undoCount(game.log, playerColor);
+
+  const undo = () => {
+    if (!game || !gameMode || !undoSteps) return;
+    const previous = replayGame(gameMode, game.log.slice(0, -undoSteps).map(({ move }) => move));
+    if (!previous) return;
+    showGame(previous);
+    setHint(null);
+    setEndDismissed(false);
   };
 
   useEffect(() => {
-    if (screen !== "game" || !board || !gameMode || !playerColor || !history) return;
-    saveGame({ mode: gameMode, playerColor, opponent, botLevel, board, turn, history, captured, result, status });
-  }, [board, botLevel, captured, gameMode, history, opponent, playerColor, result, screen, status, turn]);
+    if (screen !== "game" || !game || !gameMode || !playerColor) return;
+    saveGame({
+      mode: gameMode,
+      playerColor,
+      opponent,
+      botLevel,
+      moves: game.log.map(({ move }) => move),
+      result: game.result,
+      endReason: game.endReason,
+      online,
+    });
+  }, [botLevel, game, gameMode, online, opponent, playerColor, screen]);
 
   useEffect(() => {
-    if (!board || !gameMode || !playerColor || !history || result || twoPlayers) return;
-    const botColor = otherColor(playerColor);
+    if (!game || !gameMode || !playerColor || result || opponent !== "bot") return;
+    const botColor: PieceColor = playerColor === "white" ? "black" : "white";
     if (turn !== botColor) return;
 
     setThinking(true);
     // The reply waits for the player's piece to land, however fast the bot answers.
     const replyAt = performance.now() + (lastMove ? moveSettleTime(lastMove) * 1000 : 0) + BOT_REPLY_PAUSE_MS;
-    const request = requestBotMove(board, gameMode, botColor, botLevel, history);
+    const request = requestBotMove(game.board, gameMode, botColor, botLevel, game.history);
     let cancelled = false;
     let timer: number | undefined;
 
     request.promise.then((move) => {
       if (cancelled) return;
       timer = window.setTimeout(() => {
-        if (!move) {
-          const { result: nextResult, drawReason } = finalResult(board, gameMode, botColor, history);
-          setResult(nextResult);
-          setStatus(resultMessage(nextResult, drawReason));
-          setThinking(false);
-          return;
-        }
-
-        const { finished, inCheck } = commitMove(board, gameMode, history, move, botColor);
-        setStatus(finished ?? (inCheck ? "Şah altındasın. Hamleni dikkatle seç." : "Sıra sende."));
+        if (move) applyMove(game, gameMode, move);
         setThinking(false);
       }, Math.max(0, replyAt - performance.now()));
     });
@@ -282,16 +347,35 @@ function App() {
       cancelled = true;
       request.cancel();
       window.clearTimeout(timer);
+      setThinking(false);
     };
-  }, [board, botLevel, gameMode, history, lastMove, playerColor, result, turn, twoPlayers]);
+  }, [botLevel, game, gameMode, lastMove, opponent, playerColor, result, turn]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (screen === "game" && gameMode && playerColor && board) {
-    const gameInProgress = !result && Object.values(history?.positions ?? {}).reduce((total, count) => total + count, 0) > 1;
+  if (screen === "game" && gameMode && playerColor && game) {
+    const moveTotal = game.log.length;
+    const gameInProgress = !result && moveTotal > 0;
+    const isMyTurn = turn === playerColor;
     const title = result
       ? "Oyun tamamlandı"
       : twoPlayers
         ? turn === "white" ? "Sıra beyazda" : "Sıra siyahta"
-        : thinking ? "Bot düşünüyor" : "Senin sıran";
+        : isOnline
+          ? isMyTurn ? "Senin sıran" : "Rakibin sırası"
+          : thinking ? "Bot düşünüyor" : "Senin sıran";
+    const status = result
+      ? endReasonText(game.endReason)
+      : hint ?? (checkedKing
+        ? isMyTurn || twoPlayers ? "Şah! Hamleni dikkatle seç." : "Şah çektin."
+        : !twoPlayers && !isMyTurn
+          ? isOnline
+            ? opponentConnected ? "Rakibin hamlesi bekleniyor." : "Rakibin bağlantısı koptu, dönmesi bekleniyor."
+            : "Bot düşünüyor…"
+          : "Bir taş seç.");
+    const meta = twoPlayers
+      ? <div><span>Oyun</span><strong>İki kişilik</strong></div>
+      : isOnline
+        ? <div><span>Sen · Online</span><strong>{colorLabels[playerColor]}</strong></div>
+        : <div><span>Sen · Bot {botLevel === "hard" ? "zor" : "kolay"}</span><strong>{colorLabels[playerColor]}</strong></div>;
 
     return (
       <main className="app-shell game-shell">
@@ -304,29 +388,24 @@ function App() {
             <h2>{title}</h2>
             <p className="hud-status">{status}</p>
             <div className="game-meta">
-              {twoPlayers
-                ? <div><span>Oyun</span><strong>İki kişilik</strong></div>
-                : <div><span>Sen · Bot {botLevel === "hard" ? "zor" : "kolay"}</span><strong>{colorLabels[playerColor]}</strong></div>}
+              {meta}
               <div><span>Sıra</span><strong>{colorLabels[turn]}</strong></div>
             </div>
             <div className="captured-list">
-              <CapturedRow label="Alınan siyah" color="black" captured={captured} />
-              <CapturedRow label="Alınan beyaz" color="white" captured={captured} />
+              <CapturedRow label="Alınan siyah" color="black" captured={game.captured} />
+              <CapturedRow label="Alınan beyaz" color="white" captured={game.captured} />
             </div>
             {gameMode === "mobius" && (
               <p className="topology-note">Şerit iki turda kapanır: halka boyunca ilerleyen taş bükümden geçerek karşı yüze ulaşır.</p>
             )}
             <div className="hud-actions">
-              <ConfirmButton label="Yeniden başlat" ask={gameInProgress} onConfirm={() => startGame(playerColor, opponent)} />
-              <ConfirmButton label="Ana menü" ask={gameInProgress} onConfirm={returnToMenu} />
-              {gameMode === "mobius" && (
-                <>
-                  <button className="secondary-button" type="button" aria-pressed={followCamera} onClick={() => setFollowCamera(!followCamera)}>
-                    Takip: {followCamera ? "açık" : "kapalı"}
-                  </button>
-                  <button className="secondary-button" type="button" onClick={() => setShowRules(true)}>Kurallar</button>
-                </>
-              )}
+              {!isOnline && <button className="secondary-button" type="button" disabled={!undoSteps} onClick={undo}>Geri al</button>}
+              {!result && <ConfirmButton label="Teslim ol" question="Emin misin?" ask onConfirm={resign} />}
+              <button className="secondary-button" type="button" onClick={() => setShowMenu(true)}>Menü</button>
+            </div>
+            {isOnline && online && <p className="room-note">Oda: {online.roomCode}</p>}
+            <div className="hud-moves">
+              <MoveList log={game.log} />
             </div>
           </aside>
 
@@ -335,7 +414,7 @@ function App() {
               <GameScene
                 key={gameId}
                 mode={gameMode}
-                board={board}
+                board={game.board}
                 selected={selected}
                 validMoves={validMoves}
                 lastMove={lastMove}
@@ -356,46 +435,78 @@ function App() {
               <span className="help-mouse">Sürükle: döndür · Tekerlek: yakınlaştır</span>
               <span className="help-touch">Parmakla döndür · İki parmakla yakınlaştır</span>
             </div>
-            {showRules && (
-              <div className="rules-dialog" role="dialog" aria-label="Möbius kuralları">
-                <strong>Möbius Satranç nasıl oynanır?</strong>
-                <ul>
-                  <li><b>Tahta:</b> 4 satır, 16 sütun. Sütunlar halka gibi döner, satırların ucunda ise şerit biter.</li>
-                  <li><b>İki yüz:</b> Şerit iki turda kapanır. Halka boyunca giden taş bükümden geçip karşı yüze ulaşır.</li>
-                  <li><b>Diziliş:</b> Her ordunun iki yanında piyonlar, ortasında diğer taşlar vardır. Rakip iki yönden de gelebilir.</li>
-                  <li><b>Piyonlar:</b> Bulundukları yanda dışa doğru ilerler ve 6 kare sonra terfi eder. İlk hamlede 2 kare gidebilir, geçerken alma geçerlidir.</li>
-                  <li><b>Diğer taşlar:</b> Klasik satrançtaki gibi oynar; kale ve vezir halkanın iki yönünden de gidebilir. Rok yoktur.</li>
-                  <li><b>Oyun sonu:</b> Köşe olmadığı için şah kaçabilir. Şah ve tek kale çoğu zaman mat edemez, şah ve vezir her zaman eder.</li>
-                  <li><b>Harita:</b> Alttaki düz harita tüm tahtayı gösterir. Görünmeyen karelerde de oradan oynayabilirsin.</li>
-                </ul>
-                <button className="secondary-button" type="button" autoFocus onClick={() => setShowRules(false)}>Tamam</button>
-              </div>
+            {showMenu && (
+              <MenuDialog log={game.log} onClose={() => setShowMenu(false)}>
+                {!isOnline && (
+                  <ConfirmButton
+                    label="Yeniden başlat"
+                    question="Oyun silinsin mi?"
+                    ask={gameInProgress}
+                    onConfirm={() => beginGame(gameMode, playerColor, opponent, null)}
+                  />
+                )}
+                <ConfirmButton
+                  label="Ana menü"
+                  question={isOnline ? "Teslim olup çıkılsın mı?" : "Oyun silinsin mi?"}
+                  ask={gameInProgress}
+                  onConfirm={returnToMenu}
+                />
+                {gameMode === "mobius" && (
+                  <button className="secondary-button" type="button" aria-pressed={followCamera} onClick={() => setFollowCamera(!followCamera)}>
+                    Kamera takibi: {followCamera ? "açık" : "kapalı"}
+                  </button>
+                )}
+                <button
+                  className="secondary-button"
+                  type="button"
+                  aria-pressed={soundOn}
+                  onClick={() => {
+                    saveSoundSetting(!soundOn);
+                    setSoundOn(!soundOn);
+                  }}
+                >
+                  Ses: {soundOn ? "açık" : "kapalı"}
+                </button>
+                {gameMode === "mobius" && (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => {
+                      setShowMenu(false);
+                      setShowRules(true);
+                    }}
+                  >
+                    Kurallar
+                  </button>
+                )}
+              </MenuDialog>
             )}
+            {showRules && <RulesDialog onClose={() => setShowRules(false)} />}
             {pendingPromotion && (
-              <div className="promotion-dialog" role="dialog" aria-label="Terfi seçimi">
-                <strong>Piyon ne olsun?</strong>
-                <div className="promotion-choices">
-                  {PROMOTION_PIECES.map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      autoFocus={type === "queen"}
-                      onClick={() => {
-                        setPendingPromotion(null);
-                        playPlayerMove({ ...pendingPromotion, promotion: type });
-                      }}
-                    >
-                      <span className={`map-piece is-${turn}`}>{PIECE_GLYPHS[type]}</span>
-                      <small>{PIECE_NAMES[type]}</small>
-                    </button>
-                  ))}
-                </div>
-                <button className="secondary-button" type="button" onClick={() => setPendingPromotion(null)}>Vazgeç</button>
-              </div>
+              <PromotionDialog
+                color={turn}
+                onChoose={(type) => {
+                  setPendingPromotion(null);
+                  playPlayerMove({ ...pendingPromotion, promotion: type });
+                }}
+                onCancel={() => setPendingPromotion(null)}
+              />
+            )}
+            {result && !endDismissed && (
+              <EndDialog
+                result={result}
+                endReason={game.endReason}
+                opponent={opponent}
+                playerColor={playerColor}
+                moveCount={moveTotal}
+                onNewGame={isOnline ? null : () => beginGame(gameMode, playerColor, opponent, null)}
+                onMenu={returnToMenu}
+                onClose={() => setEndDismissed(true)}
+              />
             )}
             {gameMode === "mobius" && (
               <BoardMap
-                board={board}
+                board={game.board}
                 viewColor={playerColor}
                 selected={selected}
                 validMoves={validMoves}
@@ -481,8 +592,22 @@ function App() {
                 <strong>İki kişilik</strong>
                 <small>Aynı cihazda sırayla</small>
               </button>
+              <button className="color-button online-choice" type="button" onClick={() => setScreen("online")}>
+                <span className="piece-preview">⇄</span>
+                <strong>Online</strong>
+                <small>Arkadaşınla ya da rakip bularak</small>
+              </button>
             </div>
           </div>
+        )}
+
+        {screen === "online" && (
+          <OnlineLobby
+            mode={gameMode}
+            initialCode={inviteCode}
+            onStart={startOnlineGame}
+            onBack={() => setScreen(gameMode ? "color" : "start")}
+          />
         )}
       </section>
     </main>

@@ -39,7 +39,17 @@ Piyonlar dışa doğru ilerler ve klasik satrançtaki gibi 6 kare sonra terfi ed
 
 ### Oynanış
 
-Bota karşı (kolay ya da zor) beyaz veya siyahla, ya da aynı cihazda iki kişi oynanabilir. Süren oyun otomatik kaydedilir, sayfa yenilense de devam eder. Telefonda dik ve yatay tutuş desteklenir. Möbius modunda şeridin her zaman bir kısmı görünmez; bu yüzden altta tüm tahtayı gösteren, tıklanabilir bir düz harita vardır. Kamera görünmeyen hamleleri kendisi gösterir, panelden kapatılabilir.
+Bota karşı (kolay ya da zor) beyaz veya siyahla, aynı cihazda iki kişi ya da online oynanabilir. Süren oyun otomatik kaydedilir, sayfa yenilense de devam eder. Telefonda dik ve yatay tutuş desteklenir. Möbius modunda şeridin her zaman bir kısmı görünmez; bu yüzden altta tüm tahtayı gösteren, tıklanabilir bir düz harita vardır. Kamera görünmeyen hamleleri kendisi gösterir, panelden kapatılabilir.
+
+## Online oyun
+
+Online oyun Supabase kullanır: anonim giriş, 6 haneli oda kodu, davet bağlantısı ve hızlı eşleşme. Bağlantı ayarlanmamışsa oyunun geri kalanı yine çalışır.
+
+1. Bir Supabase projesi aç ve **Authentication → Sign In / Providers** altında **Anonymous Sign-Ins** seçeneğini aç.
+2. `supabase/migrations/20261104_001_online_chess.sql` dosyasının tamamını **SQL Editor**'da çalıştır.
+3. **Project URL** ve **publishable/anon key** değerlerini `.env.example` dosyasındaki adlarla Vercel'in **Environment Variables** bölümüne ve yerelde `.env.local` dosyasına yaz. `service_role` anahtarını asla yazma.
+
+Hamlelerin kurallara uygunluğunu iki oyuncunun uygulaması da denetler; sunucu sıra, oyuncu ve oyun durumunu denetler. Ücretsiz proje boşta kalınca duraklamasın diye `api/keepalive.js` günde bir kez çalışır.
 
 ## Testler
 
@@ -48,4 +58,4 @@ npm test
 npm run test:full
 ```
 
-`test:full`, 1000'er rastgele oyunluk uzun testi de çalıştırır.
+`test:full`, 1000'er rastgele oyunluk uzun testi ve online veritabanı testlerini de çalıştırır.

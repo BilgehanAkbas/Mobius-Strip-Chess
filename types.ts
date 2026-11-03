@@ -1,5 +1,5 @@
 export type GameMode = "classic" | "mobius";
-export type Opponent = "bot" | "human";
+export type Opponent = "bot" | "human" | "online";
 export type PieceType = "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
 export type PieceColor = "white" | "black";
 export type PawnDirection = 1 | -1;
@@ -48,6 +48,7 @@ export interface AnimatedMove extends MoveDescription {
 
 export type GameResult = "white-wins" | "black-wins" | "draw" | null;
 export type DrawReason = "stalemate" | "insufficient" | "repetition" | "fifty-moves";
+export type EndReason = DrawReason | "checkmate" | "resignation" | "invalid-move";
 
 export interface GameHistory {
   /** How many times each position has occurred. */
