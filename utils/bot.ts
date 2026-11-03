@@ -28,6 +28,9 @@ const VALUES: Record<GameMode, Record<PieceType, number>> = {
 };
 
 const ENDGAME_MATERIAL = 1500;
+const HUNT_MATERIAL_LEAD = 300;
+const HUNT_EDGE_WEIGHT = 16;
+const HUNT_DISTANCE_WEIGHT = 8;
 
 class OutOfTime extends Error {}
 
@@ -88,6 +91,19 @@ function kingShelter(board: BoardState, mode: GameMode, color: PieceColor, kingX
   return shelter * 7;
 }
 
+/** How to finish a won ending: drive the lone king to the edge and bring the own king next to it. */
+function huntBonus(mode: GameMode, loser: [number, number], winner: [number, number]): number {
+  const [loserX, loserY] = loser;
+  const [winnerX, winnerY] = winner;
+  const edge = mode === "classic"
+    ? Math.max(Math.abs(loserX - 3.5), Math.abs(loserY - 3.5))
+    : Math.abs(loserY - 1.5) * 2;
+  const across = Math.abs(loserX - winnerX);
+  const dx = mode === "mobius" ? Math.min(across, 16 - across) : across;
+  const distance = Math.max(dx, Math.abs(loserY - winnerY));
+  return edge * HUNT_EDGE_WEIGHT - distance * HUNT_DISTANCE_WEIGHT;
+}
+
 /** Score from the point of view of the side to move. */
 function evaluate(board: BoardState, mode: GameMode, side: PieceColor): number {
   const values = VALUES[mode];
@@ -102,14 +118,23 @@ function evaluate(board: BoardState, mode: GameMode, side: PieceColor): number {
   }
   const endgame = nonPawnMaterial < ENDGAME_MATERIAL;
   let position = 0;
+  let ownKing: [number, number] | null = null;
+  let enemyKing: [number, number] | null = null;
   for (let y = 0; y < board.length; y += 1) {
     for (let x = 0; x < board[y].length; x += 1) {
       const piece = board[y][x];
       if (!piece) continue;
+      if (piece.type === "king") {
+        if (piece.color === side) ownKing = [x, y];
+        else enemyKing = [x, y];
+      }
       let bonus = mode === "mobius" ? mobiusSquareBonus(piece, x, y, endgame) : classicSquareBonus(piece, x, y, endgame);
       if (piece.type === "king" && !endgame) bonus += kingShelter(board, mode, piece.color, x, y);
       position += piece.color === side ? bonus : -bonus;
     }
+  }
+  if (endgame && Math.abs(material) >= HUNT_MATERIAL_LEAD && ownKing && enemyKing) {
+    position += material > 0 ? huntBonus(mode, enemyKing, ownKing) : -huntBonus(mode, ownKing, enemyKing);
   }
   return material + position;
 }

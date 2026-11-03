@@ -208,6 +208,11 @@ h2 { margin: 7px 0 22px; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -
 }
 .no-webgl { flex: 1; margin: 0; padding: 24px; display: grid; place-items: center; color: #c3c0d0; text-align: center; line-height: 1.6; }
 
+.secondary-button.is-asking { border-color: #efa84a; color: #fff; background: rgba(239,168,74,.18); }
+.rules-dialog { position: absolute; z-index: 13; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(460px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow-y: auto; padding: 18px; display: grid; gap: 10px; justify-items: start; border: 1px solid rgba(244,239,247,.16); border-radius: 16px; background: #1b1b21; box-shadow: 0 22px 60px rgba(0,0,0,.5); -webkit-user-select: text; user-select: text; }
+.rules-dialog ul { margin: 0; padding-left: 18px; display: grid; gap: 7px; color: #c3c0d0; font-size: .84rem; line-height: 1.45; }
+.rules-dialog b { color: #f7f3f7; }
+.rules-dialog .secondary-button { margin-top: 2px; justify-self: end; }
 .promotion-dialog { position: absolute; z-index: 12; left: 50%; top: 42%; transform: translate(-50%, -50%); width: min(340px, calc(100% - 28px)); padding: 18px; display: grid; justify-items: center; gap: 12px; border: 1px solid rgba(244,239,247,.16); border-radius: 16px; background: #1b1b21; box-shadow: 0 22px 60px rgba(0,0,0,.5); }
 .promotion-choices { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .promotion-choices button { min-height: 76px; padding: 8px 2px; display: grid; justify-items: center; gap: 4px; border: 1px solid rgba(244,239,247,.14); border-radius: 10px; color: #c3c0d0; background: #8d93a6; font-size: 1.9rem; line-height: 1; cursor: pointer; }

@@ -25,6 +25,7 @@ import { clearSavedGame, loadGame, saveGame } from "./utils/savedGame";
 import "./app.css";
 
 const BOT_REPLY_PAUSE_MS = 150;
+const CONFIRM_MS = 3000;
 const PROMOTION_PIECES: PieceType[] = ["queen", "rook", "bishop", "knight"];
 
 const drawMessages: Record<DrawReason, string> = {
@@ -71,6 +72,34 @@ function CapturedRow({ label, color, captured }: { label: string; color: PieceCo
   );
 }
 
+/** Throws a game away only on a second tap, so a slip of the finger on a phone costs nothing. */
+function ConfirmButton({ label, ask, onConfirm }: { label: string; ask: boolean; onConfirm: () => void }) {
+  const [asking, setAsking] = useState(false);
+
+  useEffect(() => {
+    if (!asking) return;
+    const timer = window.setTimeout(() => setAsking(false), CONFIRM_MS);
+    return () => window.clearTimeout(timer);
+  }, [asking]);
+
+  return (
+    <button
+      className={`secondary-button ${asking ? "is-asking" : ""}`}
+      type="button"
+      onClick={() => {
+        if (ask && !asking) {
+          setAsking(true);
+          return;
+        }
+        setAsking(false);
+        onConfirm();
+      }}
+    >
+      {asking ? "Oyun silinsin mi?" : label}
+    </button>
+  );
+}
+
 function App() {
   // A phone can reload the page whenever the browser goes to the background, so a game in progress comes back.
   const [restored] = useState(loadGame);
@@ -92,6 +121,7 @@ function App() {
   const [pendingPromotion, setPendingPromotion] = useState<Move | null>(null);
   const [botLevel, setBotLevel] = useState<BotLevel>(restored?.botLevel ?? "hard");
   const [webGLSupported] = useState(canUseWebGL);
+  const [showRules, setShowRules] = useState(false);
   const moveCount = useRef(0);
 
   const twoPlayers = opponent === "human";
@@ -256,6 +286,7 @@ function App() {
   }, [board, botLevel, gameMode, history, lastMove, playerColor, result, turn, twoPlayers]);
 
   if (screen === "game" && gameMode && playerColor && board) {
+    const gameInProgress = !result && Object.values(history?.positions ?? {}).reduce((total, count) => total + count, 0) > 1;
     const title = result
       ? "Oyun tamamlandı"
       : twoPlayers
@@ -286,12 +317,15 @@ function App() {
               <p className="topology-note">Şerit iki turda kapanır: halka boyunca ilerleyen taş bükümden geçerek karşı yüze ulaşır.</p>
             )}
             <div className="hud-actions">
-              <button className="secondary-button" type="button" onClick={() => startGame(playerColor, opponent)}>Yeniden başlat</button>
-              <button className="secondary-button" type="button" onClick={returnToMenu}>Ana menü</button>
+              <ConfirmButton label="Yeniden başlat" ask={gameInProgress} onConfirm={() => startGame(playerColor, opponent)} />
+              <ConfirmButton label="Ana menü" ask={gameInProgress} onConfirm={returnToMenu} />
               {gameMode === "mobius" && (
-                <button className="secondary-button" type="button" aria-pressed={followCamera} onClick={() => setFollowCamera(!followCamera)}>
-                  Kamera takibi: {followCamera ? "açık" : "kapalı"}
-                </button>
+                <>
+                  <button className="secondary-button" type="button" aria-pressed={followCamera} onClick={() => setFollowCamera(!followCamera)}>
+                    Takip: {followCamera ? "açık" : "kapalı"}
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => setShowRules(true)}>Kurallar</button>
+                </>
               )}
             </div>
           </aside>
@@ -322,6 +356,21 @@ function App() {
               <span className="help-mouse">Sürükle: döndür · Tekerlek: yakınlaştır</span>
               <span className="help-touch">Parmakla döndür · İki parmakla yakınlaştır</span>
             </div>
+            {showRules && (
+              <div className="rules-dialog" role="dialog" aria-label="Möbius kuralları">
+                <strong>Möbius Satranç nasıl oynanır?</strong>
+                <ul>
+                  <li><b>Tahta:</b> 4 satır, 16 sütun. Sütunlar halka gibi döner, satırların ucunda ise şerit biter.</li>
+                  <li><b>İki yüz:</b> Şerit iki turda kapanır. Halka boyunca giden taş bükümden geçip karşı yüze ulaşır.</li>
+                  <li><b>Diziliş:</b> Her ordunun iki yanında piyonlar, ortasında diğer taşlar vardır. Rakip iki yönden de gelebilir.</li>
+                  <li><b>Piyonlar:</b> Bulundukları yanda dışa doğru ilerler ve 6 kare sonra terfi eder. İlk hamlede 2 kare gidebilir, geçerken alma geçerlidir.</li>
+                  <li><b>Diğer taşlar:</b> Klasik satrançtaki gibi oynar; kale ve vezir halkanın iki yönünden de gidebilir. Rok yoktur.</li>
+                  <li><b>Oyun sonu:</b> Köşe olmadığı için şah kaçabilir. Şah ve tek kale çoğu zaman mat edemez, şah ve vezir her zaman eder.</li>
+                  <li><b>Harita:</b> Alttaki düz harita tüm tahtayı gösterir. Görünmeyen karelerde de oradan oynayabilirsin.</li>
+                </ul>
+                <button className="secondary-button" type="button" autoFocus onClick={() => setShowRules(false)}>Tamam</button>
+              </div>
+            )}
             {pendingPromotion && (
               <div className="promotion-dialog" role="dialog" aria-label="Terfi seçimi">
                 <strong>Piyon ne olsun?</strong>

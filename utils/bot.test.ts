@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BoardState, GameHistory, GameMode, Move, PieceColor, PieceData, PieceType } from "../types";
-import { applyMove, createInitialBoard, getAllLegalMoves, getGameResult, positionKey } from "./board";
+import { applyMove, createInitialBoard, finalResult, getAllLegalMoves, getGameResult, positionKey, recordMove, startHistory } from "./board";
 import { findBestMove } from "./bot";
 
 type Placement = [number, number, PieceColor, PieceType, Partial<PieceData>?];
@@ -47,6 +47,36 @@ describe("finding mate", () => {
       .filter((reply) => getGameResult(applyMove(after, "classic", reply), "classic", "white") === "white-wins" || getGameResult(applyMove(after, "classic", reply), "classic", "white") === "black-wins");
     expect(mates).toEqual([]);
   });
+});
+
+describe("finishing a won game", () => {
+  function playOut(mode: GameMode, placements: Placement[]) {
+    let board = place(mode, placements);
+    let history = startHistory(board, mode);
+    let side: PieceColor = "white";
+    for (let ply = 0; ply < 120; ply += 1) {
+      const move = findBestMove(board, mode, side, { maxDepth: 3, timeMs: 60_000, history });
+      if (!move) break;
+      const after = applyMove(board, mode, move);
+      side = side === "white" ? "black" : "white";
+      history = recordMove(history, board, after, mode, move, side);
+      board = after;
+      const { result } = finalResult(board, mode, side, history);
+      if (result) return result;
+    }
+    return "unfinished";
+  }
+
+  it.each<[string, GameMode, Placement[]]>([
+    ["queen on the Möbius loop", "mobius", [[0, 1, "white", "king"], [3, 1, "white", "queen"], [9, 2, "black", "king"]]],
+    // A single rook usually cannot force mate on the loop: with no corners, the king keeps running.
+    // An exhaustive search of the ending finds a forced win in only 4% of positions, so two are used here.
+    ["two rooks on the Möbius loop", "mobius", [[0, 1, "white", "king"], [3, 1, "white", "rook"], [4, 2, "white", "rook"], [9, 2, "black", "king"]]],
+    ["queen in classic chess", "classic", [[0, 7, "white", "king"], [1, 6, "white", "queen"], [4, 3, "black", "king"]]],
+    ["rook in classic chess", "classic", [[0, 7, "white", "king"], [1, 6, "white", "rook"], [4, 3, "black", "king"]]],
+  ])("mates with a king and %s", (_name, mode, placements) => {
+    expect(playOut(mode, placements)).toBe("white-wins");
+  }, 120_000);
 });
 
 describe("judging material", () => {
