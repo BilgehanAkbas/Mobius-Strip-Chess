@@ -1,8 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BoardMap } from "./components/BoardMap";
 import { GameScene } from "./components/GameScene";
-import type { BoardState, GameMode, GameResult, PieceColor, Position } from "./types";
-import { applyMove, createInitialBoard, findBestMove, getGameResult, getValidMoves, isKingInCheck, samePosition } from "./utils/board";
+import { ModePreview } from "./components/ModePreview";
+import type { AnimatedMove, BoardState, DrawReason, GameHistory, GameMode, GameResult, Move, Opponent, PieceColor, PieceData, PieceType, Position } from "./types";
+import {
+  applyMove,
+  createInitialBoard,
+  describeMove,
+  finalResult,
+  findKing,
+  getValidMoves,
+  isKingInCheck,
+  isPromotionMove,
+  recordMove,
+  samePosition,
+  startHistory,
+} from "./utils/board";
+import { capturedOfColor, PIECE_GLYPHS, PIECE_NAMES } from "./utils/boardMap";
+import type { BotLevel } from "./utils/bot";
+import { requestBotMove } from "./utils/botClient";
+import { canUseWebGL } from "./utils/device";
+import { moveSettleTime } from "./utils/pieceMotion";
+import { clearSavedGame, loadGame, saveGame } from "./utils/savedGame";
 import "./app.css";
+
+const BOT_REPLY_PAUSE_MS = 150;
+const PROMOTION_PIECES: PieceType[] = ["queen", "rook", "bishop", "knight"];
+
+const drawMessages: Record<DrawReason, string> = {
+  stalemate: "Pat — oyun berabere.",
+  insufficient: "Mat edecek taş kalmadı — oyun berabere.",
+  repetition: "Aynı konum üç kez oluştu — oyun berabere.",
+  "fifty-moves": "50 hamledir taş alınmadı ve piyon oynanmadı — oyun berabere.",
+};
 
 type Screen = "start" | "color" | "game";
 
@@ -11,29 +41,69 @@ const modeLabels: Record<GameMode, string> = {
   mobius: "Möbius Satranç",
 };
 
+const colorLabels: Record<PieceColor, string> = {
+  white: "Beyaz",
+  black: "Siyah",
+};
+
 function otherColor(color: PieceColor): PieceColor {
   return color === "white" ? "black" : "white";
 }
 
-function resultMessage(result: GameResult): string {
-  if (result === "draw") return "Pat — oyun berabere.";
-  return result === "white-wins" ? "Şah mat — beyaz kazandı." : "Şah mat — siyah kazandı.";
+function resultMessage(result: GameResult, drawReason: DrawReason | null): string {
+  if (drawReason) return drawMessages[drawReason];
+  if (result === "white-wins") return "Şah mat — beyaz kazandı.";
+  if (result === "black-wins") return "Şah mat — siyah kazandı.";
+  return "Oyun devam ediyor.";
+}
+
+function CapturedRow({ label, color, captured }: { label: string; color: PieceColor; captured: PieceData[] }) {
+  const pieces = capturedOfColor(captured, color);
+  return (
+    <div className="captured-row">
+      <span>{label}</span>
+      <strong aria-label={pieces.length ? `${pieces.length} taş` : "Taş yok"}>
+        {pieces.length ? pieces.map((type, index) => (
+          <i className={`map-piece is-${color}`} key={index}>{PIECE_GLYPHS[type]}</i>
+        )) : "—"}
+      </strong>
+    </div>
+  );
 }
 
 function App() {
-  const [screen, setScreen] = useState<Screen>("start");
-  const [gameMode, setGameMode] = useState<GameMode | null>(null);
-  const [playerColor, setPlayerColor] = useState<PieceColor | null>(null);
-  const [board, setBoard] = useState<BoardState | null>(null);
-  const [turn, setTurn] = useState<PieceColor>("white");
+  // A phone can reload the page whenever the browser goes to the background, so a game in progress comes back.
+  const [restored] = useState(loadGame);
+  const [screen, setScreen] = useState<Screen>(restored ? "game" : "start");
+  const [gameMode, setGameMode] = useState<GameMode | null>(restored?.mode ?? null);
+  const [playerColor, setPlayerColor] = useState<PieceColor | null>(restored?.playerColor ?? null);
+  const [opponent, setOpponent] = useState<Opponent>(restored?.opponent ?? "bot");
+  const [board, setBoard] = useState<BoardState | null>(restored?.board ?? null);
+  const [turn, setTurn] = useState<PieceColor>(restored?.turn ?? "white");
   const [selected, setSelected] = useState<Position | null>(null);
   const [thinking, setThinking] = useState(false);
-  const [result, setResult] = useState<GameResult>(null);
-  const [status, setStatus] = useState("Modunu seç.");
+  const [result, setResult] = useState<GameResult>(restored?.result ?? null);
+  const [status, setStatus] = useState(restored?.status ?? "Oyun modunu seç.");
+  const [lastMove, setLastMove] = useState<AnimatedMove | null>(null);
+  const [captured, setCaptured] = useState<PieceData[]>(restored?.captured ?? []);
+  const [followCamera, setFollowCamera] = useState(true);
+  const [gameId, setGameId] = useState(0);
+  const [history, setHistory] = useState<GameHistory | null>(restored?.history ?? null);
+  const [pendingPromotion, setPendingPromotion] = useState<Move | null>(null);
+  const [botLevel, setBotLevel] = useState<BotLevel>(restored?.botLevel ?? "hard");
+  const [webGLSupported] = useState(canUseWebGL);
+  const moveCount = useRef(0);
+
+  const twoPlayers = opponent === "human";
 
   const validMoves = useMemo(
     () => (board && gameMode && selected ? getValidMoves(board, gameMode, selected) : []),
     [board, gameMode, selected],
+  );
+
+  const checkedKing = useMemo(
+    () => (board && gameMode && isKingInCheck(board, gameMode, turn) ? findKing(board, turn) : null),
+    [board, gameMode, turn],
   );
 
   const selectMode = (mode: GameMode) => {
@@ -41,50 +111,102 @@ function App() {
     setScreen("color");
   };
 
-  const startGame = (color: PieceColor) => {
+  const playMove = (current: BoardState, mode: GameMode, move: Move): BoardState => {
+    moveCount.current += 1;
+    const description = describeMove(current, mode, move);
+    const taken = description.captured;
+    setLastMove({ ...description, id: moveCount.current, color: current[move.from.y][move.from.x]!.color });
+    if (taken) setCaptured((previous) => [...previous, taken.piece]);
+    return applyMove(current, mode, move);
+  };
+
+  /** Plays the move and updates the game. Returns what the status line needs to know. */
+  const commitMove = (current: BoardState, mode: GameMode, currentHistory: GameHistory, move: Move, side: PieceColor) => {
+    const nextBoard = playMove(current, mode, move);
+    const nextTurn = otherColor(side);
+    const nextHistory = recordMove(currentHistory, current, nextBoard, mode, move, nextTurn);
+    const { result: nextResult, drawReason } = finalResult(nextBoard, mode, nextTurn, nextHistory);
+    setBoard(nextBoard);
+    setHistory(nextHistory);
+    setSelected(null);
+    setTurn(nextTurn);
+    setResult(nextResult);
+    return {
+      finished: nextResult ? resultMessage(nextResult, drawReason) : null,
+      inCheck: isKingInCheck(nextBoard, mode, nextTurn),
+    };
+  };
+
+  const startGame = (color: PieceColor, nextOpponent: Opponent) => {
     if (!gameMode) return;
+    const initial = createInitialBoard(gameMode);
     setPlayerColor(color);
-    setBoard(createInitialBoard(gameMode));
+    setOpponent(nextOpponent);
+    setLastMove(null);
+    setCaptured([]);
+    setBoard(initial);
+    setHistory(startHistory(initial, gameMode));
+    setPendingPromotion(null);
     setTurn("white");
     setSelected(null);
     setThinking(false);
     setResult(null);
-    setStatus(color === "white" ? "Sıra sende. Bir taş seç." : "Bot beyazlarla oyuna başlıyor.");
+    setStatus(nextOpponent === "human"
+      ? "Beyaz başlıyor. Bir taş seç."
+      : color === "white" ? "Sıra sende. Bir taş seç." : "Bot beyazlarla oyuna başlıyor.");
+    setGameId((id) => id + 1);
     setScreen("game");
   };
 
   const returnToMenu = () => {
+    clearSavedGame();
     setScreen("start");
     setGameMode(null);
     setPlayerColor(null);
     setBoard(null);
+    setHistory(null);
+    setPendingPromotion(null);
+    setLastMove(null);
+    setCaptured([]);
     setSelected(null);
     setResult(null);
     setThinking(false);
-    setStatus("Modunu seç.");
+    setStatus("Oyun modunu seç.");
+  };
+
+  const playPlayerMove = (move: Move) => {
+    if (!board || !gameMode || !history) return;
+    const { finished, inCheck } = commitMove(board, gameMode, history, move, turn);
+    if (finished) setStatus(finished);
+    else if (!twoPlayers) setStatus("Bot düşünüyor…");
+    else setStatus(inCheck ? "Şah! Hamleni dikkatle seç." : "Bir taş seç.");
   };
 
   const onSquareClick = (position: Position) => {
-    if (!board || !gameMode || !playerColor || thinking || result || turn !== playerColor) return;
+    if (!board || !gameMode || !playerColor || thinking || result || pendingPromotion) return;
+    const activeColor = twoPlayers ? turn : playerColor;
+    if (turn !== activeColor) return;
+
+    if (samePosition(selected, position)) {
+      setSelected(null);
+      setStatus("Bir taş seç.");
+      return;
+    }
+
     const clickedPiece = board[position.y][position.x];
     const isLegalTarget = selected && validMoves.some((move) => samePosition(move, position));
 
     if (selected && isLegalTarget) {
-      const nextBoard = applyMove(board, gameMode, { from: selected, to: position });
-      const nextTurn = otherColor(turn);
-      const nextResult = getGameResult(nextBoard, gameMode, nextTurn);
-      setBoard(nextBoard);
-      setSelected(null);
-      setTurn(nextTurn);
-      setResult(nextResult);
-      setStatus(nextResult ? resultMessage(nextResult) : "Bot düşünüyor…");
+      const move = { from: selected, to: position };
+      if (isPromotionMove(board, gameMode, move)) setPendingPromotion(move);
+      else playPlayerMove(move);
       return;
     }
 
-    if (clickedPiece?.color === playerColor) {
+    if (clickedPiece?.color === activeColor) {
       setSelected(position);
       const moves = getValidMoves(board, gameMode, position);
-      setStatus(moves.length ? "Yeşil kareler geçerli hamleleri, kırmızılar taş alma hamlelerini gösterir." : "Bu taşın geçerli hamlesi yok.");
+      setStatus(moves.length ? "Yeşil işaretler geçerli hamleleri, kırmızı halkalar taş alma hamlelerini gösterir." : "Bu taşın geçerli hamlesi yok.");
       return;
     }
 
@@ -93,91 +215,227 @@ function App() {
   };
 
   useEffect(() => {
-    if (!board || !gameMode || !playerColor || result) return;
+    if (screen !== "game" || !board || !gameMode || !playerColor || !history) return;
+    saveGame({ mode: gameMode, playerColor, opponent, botLevel, board, turn, history, captured, result, status });
+  }, [board, botLevel, captured, gameMode, history, opponent, playerColor, result, screen, status, turn]);
+
+  useEffect(() => {
+    if (!board || !gameMode || !playerColor || !history || result || twoPlayers) return;
     const botColor = otherColor(playerColor);
     if (turn !== botColor) return;
 
     setThinking(true);
-    const timer = window.setTimeout(() => {
-      const move = findBestMove(board, gameMode, botColor, 2);
-      if (!move) {
-        const nextResult = getGameResult(board, gameMode, botColor);
-        setResult(nextResult);
-        setStatus(resultMessage(nextResult));
+    // The reply waits for the player's piece to land, however fast the bot answers.
+    const replyAt = performance.now() + (lastMove ? moveSettleTime(lastMove) * 1000 : 0) + BOT_REPLY_PAUSE_MS;
+    const request = requestBotMove(board, gameMode, botColor, botLevel, history);
+    let cancelled = false;
+    let timer: number | undefined;
+
+    request.promise.then((move) => {
+      if (cancelled) return;
+      timer = window.setTimeout(() => {
+        if (!move) {
+          const { result: nextResult, drawReason } = finalResult(board, gameMode, botColor, history);
+          setResult(nextResult);
+          setStatus(resultMessage(nextResult, drawReason));
+          setThinking(false);
+          return;
+        }
+
+        const { finished, inCheck } = commitMove(board, gameMode, history, move, botColor);
+        setStatus(finished ?? (inCheck ? "Şah altındasın. Hamleni dikkatle seç." : "Sıra sende."));
         setThinking(false);
-        return;
-      }
-      const nextBoard = applyMove(board, gameMode, move);
-      const nextTurn = otherColor(botColor);
-      const nextResult = getGameResult(nextBoard, gameMode, nextTurn);
-      setBoard(nextBoard);
-      setTurn(nextTurn);
-      setResult(nextResult);
-      setStatus(nextResult ? resultMessage(nextResult) : (isKingInCheck(nextBoard, gameMode, nextTurn) ? "Şah altındasın. Hamleni dikkatle seç." : "Sıra sende."));
-      setThinking(false);
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [board, gameMode, playerColor, result, turn]);
+      }, Math.max(0, replyAt - performance.now()));
+    });
+
+    return () => {
+      cancelled = true;
+      request.cancel();
+      window.clearTimeout(timer);
+    };
+  }, [board, botLevel, gameMode, history, lastMove, playerColor, result, turn, twoPlayers]);
+
+  if (screen === "game" && gameMode && playerColor && board) {
+    const title = result
+      ? "Oyun tamamlandı"
+      : twoPlayers
+        ? turn === "white" ? "Sıra beyazda" : "Sıra siyahta"
+        : thinking ? "Bot düşünüyor" : "Senin sıran";
+
+    return (
+      <main className="app-shell game-shell">
+        <section className="game-view">
+          <aside className="game-hud">
+            <div className="hud-topline">
+              <span className={`status-dot ${thinking ? "is-thinking" : ""}`} />
+              <p className="hud-kicker">{modeLabels[gameMode]}</p>
+            </div>
+            <h2>{title}</h2>
+            <p className="hud-status">{status}</p>
+            <div className="game-meta">
+              {twoPlayers
+                ? <div><span>Oyun</span><strong>İki kişilik</strong></div>
+                : <div><span>Sen · Bot {botLevel === "hard" ? "zor" : "kolay"}</span><strong>{colorLabels[playerColor]}</strong></div>}
+              <div><span>Sıra</span><strong>{colorLabels[turn]}</strong></div>
+            </div>
+            <div className="captured-list">
+              <CapturedRow label="Alınan siyah" color="black" captured={captured} />
+              <CapturedRow label="Alınan beyaz" color="white" captured={captured} />
+            </div>
+            {gameMode === "mobius" && (
+              <p className="topology-note">Şerit iki turda kapanır: halka boyunca ilerleyen taş bükümden geçerek karşı yüze ulaşır.</p>
+            )}
+            <div className="hud-actions">
+              <button className="secondary-button" type="button" onClick={() => startGame(playerColor, opponent)}>Yeniden başlat</button>
+              <button className="secondary-button" type="button" onClick={returnToMenu}>Ana menü</button>
+              {gameMode === "mobius" && (
+                <button className="secondary-button" type="button" aria-pressed={followCamera} onClick={() => setFollowCamera(!followCamera)}>
+                  Kamera takibi: {followCamera ? "açık" : "kapalı"}
+                </button>
+              )}
+            </div>
+          </aside>
+
+          <div className="game-stage">
+            {webGLSupported ? (
+              <GameScene
+                key={gameId}
+                mode={gameMode}
+                board={board}
+                selected={selected}
+                validMoves={validMoves}
+                lastMove={lastMove}
+                checkedKing={checkedKing}
+                playerColor={playerColor}
+                turn={turn}
+                twoPlayers={twoPlayers}
+                followCamera={followCamera}
+                onSquareClick={onSquareClick}
+              />
+            ) : (
+              <p className="no-webgl">
+                Bu cihaz ya da tarayıcı 3B görüntülemeyi desteklemiyor.
+                {gameMode === "mobius" ? " Oyunu alttaki haritadan oynayabilirsin." : " Klasik mod için başka bir tarayıcı dene."}
+              </p>
+            )}
+            <div className="camera-help">
+              <span className="help-mouse">Sürükle: döndür · Tekerlek: yakınlaştır</span>
+              <span className="help-touch">Parmakla döndür · İki parmakla yakınlaştır</span>
+            </div>
+            {pendingPromotion && (
+              <div className="promotion-dialog" role="dialog" aria-label="Terfi seçimi">
+                <strong>Piyon ne olsun?</strong>
+                <div className="promotion-choices">
+                  {PROMOTION_PIECES.map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      autoFocus={type === "queen"}
+                      onClick={() => {
+                        setPendingPromotion(null);
+                        playPlayerMove({ ...pendingPromotion, promotion: type });
+                      }}
+                    >
+                      <span className={`map-piece is-${turn}`}>{PIECE_GLYPHS[type]}</span>
+                      <small>{PIECE_NAMES[type]}</small>
+                    </button>
+                  ))}
+                </div>
+                <button className="secondary-button" type="button" onClick={() => setPendingPromotion(null)}>Vazgeç</button>
+              </div>
+            )}
+            {gameMode === "mobius" && (
+              <BoardMap
+                board={board}
+                viewColor={playerColor}
+                selected={selected}
+                validMoves={validMoves}
+                lastMove={lastMove}
+                checkedKing={checkedKing}
+                onSquareClick={onSquareClick}
+              />
+            )}
+          </div>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="app-shell">
-      {screen === "game" && gameMode && playerColor && board ? (
-        <section className="game-view">
-          <GameScene mode={gameMode} board={board} selected={selected} validMoves={validMoves} onSquareClick={onSquareClick} />
-          <aside className="game-hud">
-            <span className={`status-dot ${thinking ? "is-thinking" : ""}`} />
-            <p className="hud-kicker">{modeLabels[gameMode].toUpperCase()}</p>
-            <h2>{result ? "Oyun tamamlandı" : (thinking ? "Bot düşünüyor" : "Senin sıran")}</h2>
-            <dl className="game-meta">
-              <div><dt>Sen</dt><dd>{playerColor === "white" ? "Beyaz" : "Siyah"}</dd></div>
-              <div><dt>Sıra</dt><dd>{turn === "white" ? "Beyaz" : "Siyah"}</dd></div>
-            </dl>
-            <p className="hud-status">{status}</p>
-            {gameMode === "mobius" && <p className="topology-note">Şeridin uç birleşiminden geçince satır yönü tersine döner.</p>}
-            <button className="primary-button" type="button" onClick={returnToMenu}>Ana menüye dön</button>
-          </aside>
-        </section>
-      ) : (
-        <section className="menu-card">
-          <div className="brand">
-            <span className="brand-kicker">3D TOPOLOGICAL CHESS</span>
-            <h1>Möbius Chess</h1>
-            <p>Satranç tahtasının sınırlarını bük.</p>
-          </div>
+      <section className="menu-card">
+        <div className="brand">
+          <span className="brand-kicker">TOPOLOGICAL CHESS EXPERIENCE</span>
+          <h1>Möbius Chess</h1>
+          <p>Klasik satrancı oyna ya da tahtanın sınırlarını tek yüzeyli bir Möbius şeridinde bük.</p>
+        </div>
 
-          {screen === "start" && (
-            <div className="menu-content">
-              <h2>Oyun modunu seç</h2>
-              <div className="choice-grid">
-                <button className="choice-button" type="button" onClick={() => selectMode("classic")}>
+        {screen === "start" && (
+          <div className="menu-content">
+            <div className="section-heading">
+              <div>
+                <span className="section-eyebrow">OYUN MODU</span>
+                <h2>Nasıl oynamak istersin?</h2>
+              </div>
+            </div>
+
+            <div className="choice-grid">
+              <button className="choice-button" type="button" onClick={() => selectMode("classic")}>
+                <ModePreview mode="classic" />
+                <span className="choice-copy">
                   <span className="choice-number">01</span>
-                  <span><strong>Klasik Satranç</strong><small>8 × 8 klasik tahta ve standart yönler</small></span>
-                </button>
-                <button className="choice-button mobius-choice" type="button" onClick={() => selectMode("mobius")}>
-                  <span className="choice-number">02</span>
-                  <span><strong>Möbius Satranç</strong><small>4 × 16, tek yüzeyli bükülen topoloji</small></span>
-                </button>
-              </div>
-            </div>
-          )}
+                  <strong>Klasik Satranç</strong>
+                  <small>8 × 8 standart tahta, klasik kurallar.</small>
+                </span>
+                <span className="choice-arrow">↗</span>
+              </button>
 
-          {screen === "color" && gameMode && (
-            <div className="menu-content">
-              <button className="back-button" type="button" onClick={() => setScreen("start")}>← Mod seçimine dön</button>
-              <h2>Taş rengini seç</h2>
-              <p className="selection-info">{modeLabels[gameMode]} modu seçildi.</p>
-              <div className="color-grid">
-                <button className="color-button white-piece" type="button" onClick={() => startGame("white")}>
-                  <span className="piece-preview">♔</span><strong>Beyaz taşlar</strong><small>İlk hamle senin.</small>
-                </button>
-                <button className="color-button black-piece" type="button" onClick={() => startGame("black")}>
-                  <span className="piece-preview">♚</span><strong>Siyah taşlar</strong><small>Bot oyuna başlar.</small>
-                </button>
-              </div>
+              <button className="choice-button" type="button" onClick={() => selectMode("mobius")}>
+                <ModePreview mode="mobius" />
+                <span className="choice-copy">
+                  <span className="choice-number">02</span>
+                  <strong>Möbius Satranç</strong>
+                  <small>4 × 16 kare, iki yüz ve piyonlarla çevrili ordular.</small>
+                </span>
+                <span className="choice-arrow">↗</span>
+              </button>
             </div>
-          )}
-        </section>
-      )}
+          </div>
+        )}
+
+        {screen === "color" && gameMode && (
+          <div className="menu-content color-step">
+            <button className="back-button" type="button" onClick={() => setScreen("start")}>← Mod seçimine dön</button>
+            <span className="section-eyebrow">{modeLabels[gameMode].toUpperCase()}</span>
+            <h2>Nasıl oynayacaksın?</h2>
+            <p className="selection-info">Beyaz ilk hamleyi yapar. Siyahı seçersen bot oyuna başlar.</p>
+
+            <div className="level-picker" role="group" aria-label="Bot zorluğu">
+              <span>Bot zorluğu</span>
+              <button type="button" aria-pressed={botLevel === "easy"} onClick={() => setBotLevel("easy")}>Kolay</button>
+              <button type="button" aria-pressed={botLevel === "hard"} onClick={() => setBotLevel("hard")}>Zor</button>
+            </div>
+
+            <div className="color-grid">
+              <button className="color-button white-piece" type="button" onClick={() => startGame("white", "bot")}>
+                <span className="piece-preview">♔</span>
+                <strong>Beyaz</strong>
+                <small>Bota karşı, ilk hamle sende</small>
+              </button>
+              <button className="color-button black-piece" type="button" onClick={() => startGame("black", "bot")}>
+                <span className="piece-preview">♚</span>
+                <strong>Siyah</strong>
+                <small>Bota karşı, bot başlar</small>
+              </button>
+              <button className="color-button two-players" type="button" onClick={() => startGame("white", "human")}>
+                <span className="piece-preview">♔♚</span>
+                <strong>İki kişilik</strong>
+                <small>Aynı cihazda sırayla</small>
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
     </main>
   );
 }

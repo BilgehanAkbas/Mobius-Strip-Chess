@@ -1,6 +1,6 @@
 # Möbius Chess
 
-React, Three.js ve React Three Fiber ile hazırlanmış, klasik satrancı ve 4 × 16 Möbius şeridi üzerindeki topolojik varyantını içeren web oyunu.
+React, Three.js ve React Three Fiber ile hazırlanmış; hem klasik 8×8 satranç hem de 4×16 Möbius şeridi üzerinde oynanabilen 3B satranç denemesi.
 
 ## Çalıştırma
 
@@ -9,27 +9,43 @@ npm install
 npm run dev
 ```
 
-Üretim derlemesi için:
+Üretim derlemesi:
 
 ```bash
 npm run build
 ```
 
-## Oyun modları
+## Modlar
 
-- **Klasik:** 8 × 8 tahta, geçerli hamle denetimi, şah/mat/pat, otomatik vezir terfisi ve rok.
-- **Möbius:** 4 × 16 kare; uzunluk ekseninden taşan koordinat karşı uçta görünür ve satır indeksi tersine çevrilir. Her tarafın 16 taşı şeridin zıt uçlarında 4 × 4 alana yerleşir.
+- **Klasik Satranç:** 8×8 standart tahta ve resmî kurallar.
+- **Möbius Satranç:** 4×16 kare. Şeridin bir turunda 8 sütun vardır; 16 sütun iki turda kapanır, böylece taşlar şeridin iki yüzünde de durur. Satırlar sınırlıdır, sütunlar halka gibi döner.
 
-## Kontroller
+### Möbius başlangıç dizilimi
 
-- Taşa tıkla, ardından vurgulanan hedef karelerden birini seç.
-- Yeşil kareler boş hedefleri, kırmızı kareler taş alma hamlelerini gösterir.
-- Fare ile döndür; tekerlek ile yakınlaş/uzaklaş.
+Her iki ordu da piyonlarla çevrilidir. Beyaz 0-3, siyah ise aynası olarak 8-11. sütunlardadır; aralarında iki yanda da 4'er boş sütun kalır.
 
-## Bot
+| Satır | 0 | 1 | 2 | 3 | 4-7 | 8 | 9 | 10 | 11 | 12-15 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | P | R | R | P | boş | P | R | R | P | boş |
+| 1 | P | N | N | P | boş | P | N | N | P | boş |
+| 2 | P | B | B | P | boş | P | B | B | P | boş |
+| 3 | P | Q | K | P | boş | P | K | Q | P | boş |
 
-Bot, özel topolojiye uygun geçerli hamle üretimini kullanan, Alpha-Beta budamalı derinlik-2 Minimax araması yapar. Standart Stockfish/bitboard yapısına bağlı değildir.
+Piyonlar dışa doğru ilerler ve klasik satrançtaki gibi 6 kare sonra terfi eder. Rok yoktur; geçerken alma vardır.
 
-## Kural kapsamı
+### Kurallar
 
-Temel taş hareketleri, şah güvenliği, mat/pat, rok ve otomatik vezir terfisi uygulanır. En passant bu sürümde bulunmaz; Möbius varyantı için terfi, rakibin arka iki sütununa ulaşınca gerçekleşir.
+İki modda da geçerken alma, terfide taş seçimi, pat, üç kez aynı konum, 50 hamle kuralı ve yetersiz taş beraberliği uygulanır. Klasik modun hamle üretimi, yayımlanmış perft sayımlarıyla test edilir.
+
+### Oynanış
+
+Bota karşı (kolay ya da zor) beyaz veya siyahla, ya da aynı cihazda iki kişi oynanabilir. Süren oyun otomatik kaydedilir, sayfa yenilense de devam eder. Telefonda dik ve yatay tutuş desteklenir. Möbius modunda şeridin her zaman bir kısmı görünmez; bu yüzden altta tüm tahtayı gösteren, tıklanabilir bir düz harita vardır. Kamera görünmeyen hamleleri kendisi gösterir, panelden kapatılabilir.
+
+## Testler
+
+```bash
+npm test
+npm run test:full
+```
+
+`test:full`, 1000'er rastgele oyunluk uzun testi de çalıştırır.
