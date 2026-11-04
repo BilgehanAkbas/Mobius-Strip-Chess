@@ -9,6 +9,7 @@ const MIN_POLAR_ANGLE = 0.18;
 const MIN_FACING = 0.3;
 const FOLLOW_RADIUS = new THREE.Vector3(...MOBIUS_CAMERA_POSITION).length();
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const ORIGIN = new THREE.Vector3();
 // Tried in order: from across the ring first, because that shows the most of the board.
 const FOLLOW_TILTS: [number, number][] = [
   [-0.7, 0], [0, 0], [-0.7, 0.8], [-0.7, -0.8], [0.7, 0], [0, 0.8], [0, -0.8], [0.7, 0.8], [0.7, -0.8],
@@ -54,6 +55,26 @@ function clampPolar(direction: THREE.Vector3): THREE.Vector3 {
   const spherical = new THREE.Spherical().setFromVector3(direction);
   spherical.phi = THREE.MathUtils.clamp(spherical.phi, MIN_POLAR_ANGLE, Math.PI - MIN_POLAR_ANGLE);
   return new THREE.Vector3().setFromSpherical(spherical);
+}
+
+/** The camera's turn after a drag: it follows the finger on screen, whichever way up the camera is. */
+export function dragRotation(camera: THREE.Quaternion, right: number, down: number): THREE.Quaternion {
+  const angle = Math.hypot(right, down);
+  if (!angle) return camera.clone();
+  const axis = new THREE.Vector3(down, right, 0).normalize();
+  return camera.clone().multiply(new THREE.Quaternion().setFromAxisAngle(axis, -angle)).normalize();
+}
+
+/** Where the camera faces when it looks at the strip from this direction, with the world's up on top. */
+export function uprightView(direction: THREE.Vector3): THREE.Quaternion {
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(direction, ORIGIN, Y_AXIS));
+}
+
+/** Puts the camera at this distance from the strip, looking at its center. */
+export function placeCamera(camera: THREE.Camera, view: THREE.Quaternion, radius: number): void {
+  camera.quaternion.copy(view);
+  camera.position.set(0, 0, radius).applyQuaternion(view);
+  camera.up.set(0, 1, 0).applyQuaternion(view);
 }
 
 /** The orbit that gives a player the same view of their army as their opening camera, whichever way the strip is held. */

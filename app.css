@@ -134,6 +134,19 @@ h2 { margin: 7px 0 22px; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -
 
 .mode-art { position: absolute; inset: 0 0 112px 0; display: block; pointer-events: none; }
 
+.home-footer { margin-top: 18px; padding-top: 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 18px; border-top: 1px solid rgba(244,239,247,.09); color: #817e88; font-size: .78rem; }
+.home-footer button { padding: 0; border: 0; color: #aaa7b0; background: transparent; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.home-footer a { color: #c3c0d0; font-weight: 600; text-underline-offset: 3px; }
+.home-footer button:hover, .home-footer a:hover { color: #fff; }
+
+.privacy-policy { max-width: 720px; }
+.privacy-policy .back-button { margin-bottom: 18px; }
+.privacy-policy h2 { margin-bottom: 12px; }
+.privacy-policy h3 { margin: 20px 0 6px; font-size: .98rem; }
+.privacy-policy p { margin: 0 0 8px; color: #aaa7b0; font-size: .88rem; line-height: 1.6; }
+.privacy-policy b { color: #d8d3e2; }
+.privacy-policy .policy-date { margin-top: 20px; color: #817e88; font-size: .78rem; }
+
 .color-step { max-width: 700px; }
 .back-button,
 .secondary-button {
@@ -142,7 +155,7 @@ h2 { margin: 7px 0 22px; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -
   background: transparent;
   cursor: pointer;
 }
-.back-button { padding: 0; margin-bottom: 30px; }
+.back-button { display: block; padding: 0; margin-bottom: 30px; }
 .selection-info { margin: -10px 0 25px; color: #9e9aa5; line-height: 1.55; }
 .level-picker { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; color: #9e9aa5; font-size: .88rem; }
 .level-picker span { margin-right: 6px; }
@@ -247,6 +260,7 @@ h2 { margin: 7px 0 22px; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -
 .online-lobby h2 { margin-bottom: 0; }
 .online-lobby .selection-info { margin: 0; }
 .online-lobby .back-button { margin: 0; justify-self: start; }
+.online-cards { display: grid; gap: 14px; }
 .online-card { padding: 16px; display: grid; gap: 10px; border: 1px solid rgba(244,239,247,.11); border-radius: 14px; background: rgba(255,255,255,.028); }
 .online-card small { color: #9996a1; }
 .online-card .level-picker { margin: 0; flex-wrap: wrap; }
@@ -297,6 +311,31 @@ h2 { margin: 7px 0 22px; font-size: clamp(1.35rem, 3vw, 2rem); letter-spacing: -
   .hud-actions { margin-top: 7px; gap: 6px; }
   .hud-actions .secondary-button { padding: 6px 9px; font-size: .72rem; }
   .board-map { padding: 6px 8px 10px; }
+}
+
+/* A computer screen with browser bars taking its height: the menu still fits without scrolling. */
+@media (min-width: 761px) and (min-height: 521px) and (max-height: 960px) {
+  .app-shell { padding: 12px 28px; }
+  .menu-card { padding: 24px 40px; border-radius: 26px; }
+  h1 { margin: 8px 0; font-size: clamp(2.6rem, 9.5vh, 5rem); line-height: .95; }
+  .brand p { font-size: .95rem; line-height: 1.5; }
+  .menu-content { margin-top: clamp(14px, 3vh, 30px); }
+  h2 { margin: 5px 0 12px; font-size: 1.5rem; }
+  .choice-button { min-height: clamp(170px, calc(100dvh - 396px), 320px); padding: 18px 22px; gap: 8px; }
+  .mode-art { bottom: 84px; }
+  .choice-number { margin-bottom: 4px; }
+  .choice-button small { margin-top: 3px; line-height: 1.35; }
+  .home-footer { margin-top: 12px; padding-top: 10px; }
+  .back-button { margin-bottom: 12px; }
+  .selection-info { margin: -4px 0 12px; }
+  .color-button { min-height: 0; padding: 16px 12px; }
+  .piece-preview { margin-bottom: 8px; font-size: 3rem; }
+  .online-lobby { max-width: none; gap: 10px; }
+  .online-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .online-cards > .selection-info { align-self: center; margin: 0; }
+  .online-card { align-content: start; grid-template-rows: auto auto 1fr auto; }
+  .online-card form { grid-row: 4; }
+  .online-card > .primary-button { grid-row: 4; }
 }
 
 /* A phone on its side: every pixel of height goes to the board, and the map stands up beside it. */

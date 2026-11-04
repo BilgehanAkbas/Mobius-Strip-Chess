@@ -4,6 +4,7 @@ import { ConfirmButton, EndDialog, endReasonText, MenuDialog, MoveList, Promotio
 import { GameScene } from "./components/GameScene";
 import { ModePreview } from "./components/ModePreview";
 import { OnlineLobby } from "./components/OnlineLobby";
+import { PrivacyPolicy } from "./components/PrivacyPolicy";
 import type { AnimatedMove, GameMode, Move, Opponent, PieceColor, PieceData, Position } from "./types";
 import {
   describeMove,
@@ -27,7 +28,7 @@ import "./app.css";
 const BOT_REPLY_PAUSE_MS = 150;
 const ONLINE_POLL_MS = 5000;
 
-type Screen = "start" | "color" | "online" | "game";
+type Screen = "start" | "privacy" | "color" | "online" | "game";
 
 interface OnlineSession {
   gameId: string;
@@ -560,8 +561,18 @@ function App() {
                 <span className="choice-arrow">↗</span>
               </button>
             </div>
+
+            <footer className="home-footer">
+              <button type="button" onClick={() => setScreen("privacy")}>Privacy Policy</button>
+              <span>
+                Designed &amp; Developed by{" "}
+                <a href="https://www.linkedin.com/in/bilgehan-akbas/" target="_blank" rel="noopener noreferrer">Bilgehan Akbaş</a>
+              </span>
+            </footer>
           </div>
         )}
+
+        {screen === "privacy" && <PrivacyPolicy onBack={() => setScreen("start")} />}
 
         {screen === "color" && gameMode && (
           <div className="menu-content color-step">

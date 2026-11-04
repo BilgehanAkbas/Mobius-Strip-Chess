@@ -132,47 +132,50 @@ export function OnlineLobby({ mode, initialCode, onStart, onBack }: OnlineLobbyP
       <h2>Kiminle oynayacaksın?</h2>
       {error && <p className="online-error" role="alert">{error}</p>}
 
-      <section className="online-card">
-        <strong>Koda katıl</strong>
-        <form onSubmit={(event) => {
-          event.preventDefault();
-          if (code.length === 6) void join(code);
-        }}>
-          <input
-            aria-label="Oda kodu"
-            placeholder="ABC234"
-            autoCapitalize="characters"
-            autoComplete="off"
-            value={code}
-            onChange={(event) => setCode(normalizeRoomCode(event.target.value))}
-          />
-          <button className="primary-button" type="submit" disabled={busy || code.length !== 6}>Katıl</button>
-        </form>
-      </section>
+      <div className="online-cards">
+        <section className="online-card">
+          <strong>Koda katıl</strong>
+          <small>Arkadaşının verdiği kodu yaz.</small>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            if (code.length === 6) void join(code);
+          }}>
+            <input
+              aria-label="Oda kodu"
+              placeholder="ABC234"
+              autoCapitalize="characters"
+              autoComplete="off"
+              value={code}
+              onChange={(event) => setCode(normalizeRoomCode(event.target.value))}
+            />
+            <button className="primary-button" type="submit" disabled={busy || code.length !== 6}>Katıl</button>
+          </form>
+        </section>
 
-      {mode ? (
-        <>
-          <section className="online-card">
-            <strong>Oda kur</strong>
-            <small>Arkadaşına göndereceğin bir kod alırsın.</small>
-            <div className="level-picker" role="group" aria-label="Rengin">
-              <span>Rengin</span>
-              {COLOR_CHOICES.map(({ value, label }) => (
-                <button key={value} type="button" aria-pressed={color === value} onClick={() => setColor(value)}>{label}</button>
-              ))}
-            </div>
-            <button className="primary-button" type="button" disabled={busy} onClick={() => void enter(() => getOnlineBackend().createGame(mode, color))}>Oda kur</button>
-          </section>
+        {mode ? (
+          <>
+            <section className="online-card">
+              <strong>Oda kur</strong>
+              <small>Arkadaşına göndereceğin bir kod alırsın.</small>
+              <div className="level-picker" role="group" aria-label="Rengin">
+                <span>Rengin</span>
+                {COLOR_CHOICES.map(({ value, label }) => (
+                  <button key={value} type="button" aria-pressed={color === value} onClick={() => setColor(value)}>{label}</button>
+                ))}
+              </div>
+              <button className="primary-button" type="button" disabled={busy} onClick={() => void enter(() => getOnlineBackend().createGame(mode, color))}>Oda kur</button>
+            </section>
 
-          <section className="online-card">
-            <strong>Hızlı eşleşme</strong>
-            <small>Şu an bekleyen biriyle oynarsın.</small>
-            <button className="primary-button" type="button" disabled={busy} onClick={() => void enter(() => getOnlineBackend().quickMatch(mode))}>Rakip bul</button>
-          </section>
-        </>
-      ) : (
-        <p className="selection-info">Oda kurmak için önce ana sayfadan bir mod seç.</p>
-      )}
+            <section className="online-card">
+              <strong>Hızlı eşleşme</strong>
+              <small>Şu an bekleyen biriyle oynarsın.</small>
+              <button className="primary-button" type="button" disabled={busy} onClick={() => void enter(() => getOnlineBackend().quickMatch(mode))}>Rakip bul</button>
+            </section>
+          </>
+        ) : (
+          <p className="selection-info">Oda kurmak için önce ana sayfadan bir mod seç.</p>
+        )}
+      </div>
     </div>
   );
 }

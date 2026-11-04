@@ -2,7 +2,7 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { AnimatedMove, PieceColor, Position } from "../types";
-import { followDirection, isSquareVisibleFrom, mobiusViewQuaternion, openingDirection, selectionFocus } from "../utils/mobiusView";
+import { followDirection, isSquareVisibleFrom, mobiusViewQuaternion, openingDirection, placeCamera, selectionFocus, uprightView } from "../utils/mobiusView";
 import { moveSettleTime } from "../utils/pieceMotion";
 
 const ORBIT_SECONDS = 0.9;
@@ -10,18 +10,22 @@ const HOLD_SECONDS = 0.7;
 const MIN_RADIUS = 20;
 const MAX_FRAME_SECONDS = 1 / 20;
 
+interface CameraPose {
+  view: THREE.Quaternion;
+  radius: number;
+}
+
 interface OrbitAnimation {
-  from: THREE.Spherical;
-  to: THREE.Spherical;
+  from: CameraPose;
+  to: CameraPose;
   /** Starts negative to hold still first. */
   elapsed: number;
-  returnTo: THREE.Spherical | null;
+  returnTo: CameraPose | null;
 }
 
 interface ControlsLike {
   addEventListener(type: "start", listener: () => void): void;
   removeEventListener(type: "start", listener: () => void): void;
-  update(): void;
 }
 
 interface CameraFollowProps {
@@ -49,11 +53,8 @@ export function CameraFollow({ move, selected, validMoves, color, turn, twoPlaye
   const cameraInStripSpace = () => camera.position.clone().applyQuaternion(inverseView);
 
   const orbitTo = (direction: THREE.Vector3, delay: number, comeBack: boolean) => {
-    const from = new THREE.Spherical().setFromVector3(camera.position);
-    const to = new THREE.Spherical().setFromVector3(direction);
-    to.radius = Math.max(from.radius, MIN_RADIUS);
-    // Take the short way around the vertical axis.
-    to.theta = from.theta + THREE.MathUtils.euclideanModulo(to.theta - from.theta + Math.PI, Math.PI * 2) - Math.PI;
+    const from = { view: camera.quaternion.clone(), radius: camera.position.length() };
+    const to = { view: uprightView(direction), radius: Math.max(from.radius, MIN_RADIUS) };
     animation.current = { from, to, elapsed: -delay, returnTo: comeBack ? from : null };
     invalidate();
   };
@@ -61,7 +62,7 @@ export function CameraFollow({ move, selected, validMoves, color, turn, twoPlaye
   useLayoutEffect(() => {
     // A two-player game reloaded on the other player's turn opens on that player's army.
     if (!twoPlayers || turn === color) return;
-    camera.position.copy(openingDirection(turn, color).multiplyScalar(camera.position.length()));
+    placeCamera(camera, uprightView(openingDirection(turn, color)), camera.position.length());
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -100,12 +101,11 @@ export function CameraFollow({ move, selected, validMoves, color, turn, twoPlaye
     state.invalidate();
     current.elapsed = Math.min(ORBIT_SECONDS, current.elapsed + Math.min(delta, MAX_FRAME_SECONDS));
     const t = THREE.MathUtils.smootherstep(current.elapsed / ORBIT_SECONDS, 0, 1);
-    camera.position.setFromSpherical(new THREE.Spherical(
+    placeCamera(
+      camera,
+      current.from.view.clone().slerp(current.to.view, t),
       THREE.MathUtils.lerp(current.from.radius, current.to.radius, t),
-      THREE.MathUtils.lerp(current.from.phi, current.to.phi, t),
-      THREE.MathUtils.lerp(current.from.theta, current.to.theta, t),
-    ));
-    controls.update();
+    );
     if (current.elapsed < ORBIT_SECONDS) return;
     animation.current = current.returnTo
       ? { from: current.to, to: current.returnTo, elapsed: -HOLD_SECONDS, returnTo: null }

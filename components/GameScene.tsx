@@ -3,6 +3,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CameraFollow } from "./CameraFollow";
 import { ClassicBoard } from "./ClassicBoard";
+import { FreeRotateControls } from "./FreeRotateControls";
 import { MobiusBoard } from "./MobiusBoard";
 import { SceneLights } from "./SceneLights";
 import type { AnimatedMove, BoardState, GameMode, PieceColor, Position } from "../types";
@@ -10,6 +11,9 @@ import { isTouchDevice } from "../utils/device";
 import { MOBIUS_CAMERA_POSITION } from "../utils/mobiusView";
 
 const FULL_VIEW_ASPECT = { classic: 1.15, mobius: 1 };
+const CLASSIC_CAMERA: [number, number, number] = [8.6, 8.8, 10.2];
+// The classic board only turns around its own axis, so it stays at the opening tilt.
+const CLASSIC_TILT = Math.acos(CLASSIC_CAMERA[1] / Math.hypot(...CLASSIC_CAMERA));
 
 interface GameSceneProps {
   mode: GameMode;
@@ -26,7 +30,8 @@ interface GameSceneProps {
 }
 
 function classicCameraPosition(color: PieceColor): [number, number, number] {
-  return color === "white" ? [8.6, 8.8, 10.2] : [-8.6, 8.8, -10.2];
+  const [x, y, z] = CLASSIC_CAMERA;
+  return color === "white" ? [x, y, z] : [-x, y, -z];
 }
 
 /** Backs the camera away on narrow screens so the whole board fits, again when a phone is turned. */
@@ -122,16 +127,21 @@ export function GameScene({ mode, board, selected, validMoves, lastMove, checked
           <ContactShadows position={[0, -0.34, 0]} opacity={0.35} scale={14} blur={2.4} far={6} frames={1} />
         )}
 
-        <OrbitControls
-          makeDefault
-          enableDamping
-          dampingFactor={0.075}
-          minDistance={isMobius ? 9 : 6}
-          maxDistance={isMobius ? 70 : 40}
-          minPolarAngle={0.18}
-          maxPolarAngle={Math.PI - 0.18}
-          target={[0, 0, 0]}
-        />
+        {isMobius ? (
+          <FreeRotateControls minDistance={9} maxDistance={70} />
+        ) : (
+          <OrbitControls
+            makeDefault
+            enableDamping
+            enablePan={false}
+            dampingFactor={0.075}
+            minDistance={6}
+            maxDistance={40}
+            minPolarAngle={CLASSIC_TILT}
+            maxPolarAngle={CLASSIC_TILT}
+            target={[0, 0, 0]}
+          />
+        )}
       </Canvas>
     </div>
   );
